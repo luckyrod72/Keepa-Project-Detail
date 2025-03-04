@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -433,7 +434,7 @@ func handleKeepaProduct(c *gin.Context) {
 		Categories  []int64           `json:"categories"`
 		Brand       string            `json:"brand"`
 		BuyBoxPrice int               `json:"buyBoxPrice,omitempty"`
-		SalesRanks  map[string][]int  `json:"salesRanks,omitempty"`
+		SalesRanks  []int             `json:"salesRanks,omitempty"`
 		Offers      []SimplifiedOffer `json:"offers,omitempty"`
 	}
 
@@ -443,12 +444,13 @@ func handleKeepaProduct(c *gin.Context) {
 
 	// Extract the needed fields from each product
 	for _, product := range keepaResponse.Products {
+		rootCategory := strconv.Itoa(product.RootCategory)
 		simplifiedProduct := SimplifiedProduct{
 			Asin:       product.Asin,
 			Title:      product.Title,
 			Categories: product.Categories,
 			Brand:      product.Brand,
-			SalesRanks: product.SalesRanks,
+			SalesRanks: product.SalesRanks[rootCategory],
 		}
 
 		// Add buyBoxPrice if available
