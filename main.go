@@ -523,12 +523,6 @@ func handleKeepaProduct(c *gin.Context) {
 		return
 	}
 
-	// Store product data in Redis
-	err = saveProductToRedis(ctx, asin, body)
-	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to store product data in Redis: %v", requestID, err)
-	}
-
 	// Create simplified response with only the needed fields
 	type SimplifiedOffer struct {
 		SellerID  string `json:"sellerId"`
@@ -596,6 +590,12 @@ func handleKeepaProduct(c *gin.Context) {
 		logMessage(LogLevelError, "[RequestID: %s] Failed to create simplified response: %v", requestID, err)
 		c.Data(res.StatusCode, "application/json", body) // Return original response on error
 		return
+	}
+
+	// Store product data in Redis
+	err = saveProductToRedis(ctx, asin, simplifiedJSON)
+	if err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to store product data in Redis: %v", requestID, err)
 	}
 
 	logMessage(LogLevelInfo, "[RequestID: %s] Returning simplified response to client", requestID)
