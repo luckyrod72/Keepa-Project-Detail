@@ -307,8 +307,12 @@ func init() {
 		Addr:         redisAddr,
 		Password:     redisPassword,
 		DB:           redisDB,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		PoolSize:     10,              // 连接池大小
+		MinIdleConns: 2,               // 最小空闲连接数
+		DialTimeout:  5 * time.Second, // 连接超时
+		ReadTimeout:  3 * time.Second, // 读取超时
+		WriteTimeout: 3 * time.Second, // 写入超时
+		PoolTimeout:  4 * time.Second, // 获取连接的超时时间
 	}
 
 	// Configure TLS if enabled
@@ -355,11 +359,22 @@ func init() {
 	// Test Redis connection
 	ctx := context.Background()
 	_, err = redisClient.Ping(ctx).Result()
-	if err != nil {
-		logMessage(LogLevelWarning, "Failed to connect to Redis: %v", err)
-	} else {
-		logMessage(LogLevelInfo, "Connected to Redis at %s", redisAddr)
-	}
+
+	// 启动健康检查 goroutine
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // 每 30 秒检查一次
+		defer ticker.Stop()
+
+		for range ticker.C {
+			err = redisClient.Ping(ctx).Err()
+			if err != nil {
+				logMessage(LogLevelWarning, "Failed to connect to Redis: %v", err)
+			} else {
+				logMessage(LogLevelInfo, "Connected to Redis at %s", redisAddr)
+			}
+		}
+	}()
+
 }
 
 // Add these helper functions for Redis operations
