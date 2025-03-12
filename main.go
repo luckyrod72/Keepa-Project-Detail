@@ -393,7 +393,7 @@ func main() {
 	r := gin.Default()
 
 	// Define a route to handle Keepa product API requests
-	r.GET("/product", handleKeepaProduct)
+	r.POST("/product", handleKeepaProduct)
 
 	// Run the server
 	port := os.Getenv("PORT")
