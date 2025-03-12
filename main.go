@@ -477,7 +477,14 @@ func handleKeepaProduct(c *gin.Context) {
 	// Send request
 	logMessage(LogLevelInfo, "[RequestID: %s] Sending request to Keepa API", requestID)
 	res, err := client.Do(req)
-	if err != nil && res != nil {
+	if err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to send request: %v", err),
+		})
+		return
+	}
+	if res.StatusCode != http.StatusOK {
 		var cause string
 		switch res.StatusCode {
 		case 400:
@@ -489,10 +496,7 @@ func handleKeepaProduct(c *gin.Context) {
 		case 429:
 			cause = "NOT_ENOUGH_TOKEN"
 		}
-		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v Cause: %s", requestID, err, cause)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to send request: %v Cause: %s", err, cause),
-		})
+		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, cause)
 		return
 	}
 	defer res.Body.Close()
