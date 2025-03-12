@@ -323,7 +323,7 @@ func init() {
 			// Use a default location for the certificate
 			homeDir, err := os.UserHomeDir()
 			if err == nil {
-				redisCertPath = filepath.Join(homeDir, ".redis", "server-ca.pem")
+				redisCertPath = filepath.Join(homeDir, "server-ca.pem")
 				logMessage(LogLevelInfo, "No Redis certificate path provided, using default: %s", redisCertPath)
 			} else {
 				logMessage(LogLevelWarning, "Could not determine home directory for default certificate path: %v", err)
