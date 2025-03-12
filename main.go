@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -10,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -296,12 +299,56 @@ func init() {
 	redisAddr := getEnvWithDefault("REDIS_ADDR", "localhost:6379")
 	redisPassword := getEnvWithDefault("REDIS_PASSWORD", "")
 	redisDB, _ := strconv.Atoi(getEnvWithDefault("REDIS_DB", "0"))
+	redisTLS := getEnvWithDefault("REDIS_TLS", "false") == "true"
+	redisCertPath := getEnvWithDefault("REDIS_CERT_PATH", "")
 
-	redisClient = redis.NewClient(&redis.Options{
+	// Configure Redis options
+	redisOptions := &redis.Options{
 		Addr:     redisAddr,
 		Password: redisPassword,
 		DB:       redisDB,
-	})
+	}
+
+	// Configure TLS if enabled
+	if redisTLS {
+		logMessage(LogLevelInfo, "Configuring Redis with TLS")
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+
+		// Automatically set a default certificate path if TLS is enabled but no path is provided
+		if redisCertPath == "" {
+			// Use a default location for the certificate
+			homeDir, err := os.UserHomeDir()
+			if err == nil {
+				redisCertPath = filepath.Join(homeDir, ".redis", "server-ca.pem")
+				logMessage(LogLevelInfo, "No Redis certificate path provided, using default: %s", redisCertPath)
+			} else {
+				logMessage(LogLevelWarning, "Could not determine home directory for default certificate path: %v", err)
+			}
+		}
+
+		// Load CA certificate if provided
+		if redisCertPath != "" {
+			logMessage(LogLevelInfo, "Loading Redis CA certificate from: %s", redisCertPath)
+			caCert, err := os.ReadFile(redisCertPath)
+			if err != nil {
+				logMessage(LogLevelError, "Failed to read Redis CA certificate: %v", err)
+			} else {
+				caCertPool := x509.NewCertPool()
+				if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+					logMessage(LogLevelError, "Failed to parse Redis CA certificate")
+				} else {
+					tlsConfig.RootCAs = caCertPool
+					logMessage(LogLevelInfo, "Redis CA certificate loaded successfully")
+				}
+			}
+		}
+
+		redisOptions.TLSConfig = tlsConfig
+	}
+
+	redisClient = redis.NewClient(redisOptions)
 
 	// Test Redis connection
 	ctx := context.Background()

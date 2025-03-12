@@ -16,6 +16,9 @@ COPY . .
 # 构建应用
 RUN CGO_ENABLED=0 GOOS=linux go build -v -o server
 
+# 复制 server-ca.pem 证书文件
+COPY --from=builder /app/server-ca.pem /server-ca.pem
+
 # 使用 Google 的 distroless 作为生产环境
 FROM gcr.io/distroless/base-debian11
 
