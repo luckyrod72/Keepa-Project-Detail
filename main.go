@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"io"
 	"log"
 	"net/http"
@@ -10,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 // Define log levels
@@ -264,13 +265,15 @@ type KeepaProduct struct {
 	ReferralFeePercentage           float64            `json:"referralFeePercentage"`
 }
 
-// 辅助函数：将 Keepa 时间戳转换为 Go time.Time
-// Keepa 时间戳是以小时为单位，从1970年1月1日开始计算
-func KeepaTimestampToTime(keepaTimestamp int) time.Time {
-	// Keepa 时间戳是以小时为单位，需要转换为秒
-	unixSeconds := int64(keepaTimestamp) * 3600
-	return time.Unix(unixSeconds, 0)
-}
+// Add these constants for Redis
+const (
+	// ... existing constants
+	RedisKeyPrefix = "keepa:product:"
+	RedisTTL       = 24 * time.Hour
+)
+
+// Add Redis client as a global variable
+var redisClient *redis.Client
 
 // Logger instance
 var logger *log.Logger
@@ -288,6 +291,37 @@ func init() {
 	logger = log.New(multiWriter, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 
 	logMessage(LogLevelInfo, "Logging system initialized")
+
+	// Initialize Redis client
+	redisAddr := getEnvWithDefault("REDIS_ADDR", "localhost:6379")
+	redisPassword := getEnvWithDefault("REDIS_PASSWORD", "")
+	redisDB, _ := strconv.Atoi(getEnvWithDefault("REDIS_DB", "0"))
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
+	})
+
+	// Test Redis connection
+	ctx := context.Background()
+	_, err = redisClient.Ping(ctx).Result()
+	if err != nil {
+		logMessage(LogLevelWarning, "Failed to connect to Redis: %v", err)
+	} else {
+		logMessage(LogLevelInfo, "Connected to Redis at %s", redisAddr)
+	}
+}
+
+// Add these helper functions for Redis operations
+func getProductFromRedis(ctx context.Context, asin string) ([]byte, error) {
+	key := RedisKeyPrefix + asin
+	return redisClient.Get(ctx, key).Bytes()
+}
+
+func saveProductToRedis(ctx context.Context, asin string, data []byte) error {
+	key := RedisKeyPrefix + asin
+	return redisClient.Set(ctx, key, data, RedisTTL).Err()
 }
 
 // Helper function to log messages
@@ -324,6 +358,17 @@ func handleKeepaProduct(c *gin.Context) {
 	asin := c.DefaultQuery("asin", "B0DCDS4D5L")
 	logMessage(LogLevelInfo, "[RequestID: %s] Request parameter ASIN: %s", requestID, asin)
 
+	// Create context for Redis operations
+	ctx := context.Background()
+
+	// Try to get data from Redis first
+	cachedData, err := getProductFromRedis(ctx, asin)
+	if err == nil && len(cachedData) > 0 {
+		logMessage(LogLevelInfo, "[RequestID: %s] Cache hit for ASIN: %s", requestID, asin)
+		c.Data(http.StatusOK, "application/json", cachedData)
+		return
+	}
+
 	// Read Keepa API parameters from environment variables, use defaults if not set
 	domain := getEnvWithDefault("KEEPA_DOMAIN", "1")
 	apiKey := getEnvWithDefault("KEEPA_API_KEY", "rt7t1904up7638ddhboifgfksfedu7pap6gde8p5to6mtripoib3q4n1h3433rh4")
@@ -357,7 +402,7 @@ func handleKeepaProduct(c *gin.Context) {
 
 	// Create HTTP client
 	client := &http.Client{
-		Timeout: 30 * time.Second, // Set timeout
+		Timeout: 120 * time.Second, // Set timeout
 	}
 
 	// Create request
@@ -377,9 +422,20 @@ func handleKeepaProduct(c *gin.Context) {
 	logMessage(LogLevelInfo, "[RequestID: %s] Sending request to Keepa API", requestID)
 	res, err := client.Do(req)
 	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, err)
+		var cause string
+		switch res.StatusCode {
+		case 400:
+			cause = "REQUEST_REJECTED"
+		case 402:
+			cause = "PAYMENT_REQUIRED"
+		case 405:
+			cause = "METHOD_NOT_ALLOWED"
+		case 429:
+			cause = "NOT_ENOUGH_TOKEN"
+		}
+		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v Cause: %s", requestID, err, cause)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to send request: %v", err),
+			"error": fmt.Sprintf("Failed to send request: %v Cause: %s", err, cause),
 		})
 		return
 	}
@@ -416,6 +472,12 @@ func handleKeepaProduct(c *gin.Context) {
 			"error": fmt.Sprintf("Failed to parse Keepa API response: %v", err),
 		})
 		return
+	}
+
+	// Store product data in Redis
+	err = saveProductToRedis(ctx, asin, body)
+	if err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to store product data in Redis: %v", requestID, err)
 	}
 
 	// Create simplified response with only the needed fields
