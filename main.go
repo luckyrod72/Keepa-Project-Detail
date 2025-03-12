@@ -1,6 +1,8 @@
 package main
 
 import (
+	memorystore "cloud.google.com/go/redis/apiv1"
+	"cloud.google.com/go/redis/apiv1/redispb"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -12,7 +14,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -299,10 +300,37 @@ func init() {
 	redisAddr := getEnvWithDefault("REDIS_ADDR", "localhost:6379")
 	redisPassword := getEnvWithDefault("REDIS_PASSWORD", "")
 	redisDB, _ := strconv.Atoi(getEnvWithDefault("REDIS_DB", "0"))
-	redisTLS := getEnvWithDefault("REDIS_TLS", "false") == "true"
-	redisCertPath := getEnvWithDefault("REDIS_CERT_PATH", "")
+	projectID := getEnvWithDefault("PROJECT_ID", "")
+	location := getEnvWithDefault("LOCATION_ID", "")
+	instanceID := getEnvWithDefault("INSTANCE_ID", "")
 
 	// Configure Redis options
+	ctx := context.Background()
+
+	adminClient, err := memorystore.NewCloudRedisClient(ctx)
+	if err != nil {
+		logMessage(LogLevelError, "Failed to create redis client: %v", err)
+	}
+	defer adminClient.Close()
+
+	req := &redispb.GetInstanceRequest{
+		Name: fmt.Sprintf("projects/%s/locations/%s/instances/%s", projectID, location, instanceID),
+	}
+
+	instance, err := adminClient.GetInstance(ctx, req)
+	if err != nil {
+		logMessage(LogLevelError, "Failed to get instance: %v", err)
+	}
+
+	// Load CA cert
+	caCerts := instance.GetServerCaCerts()
+	if len(caCerts) == 0 {
+		logMessage(LogLevelError, "Failed to get instance caCerts")
+	}
+
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM([]byte(caCerts[0].Cert))
+
 	redisOptions := &redis.Options{
 		Addr:         redisAddr,
 		Password:     redisPassword,
@@ -313,51 +341,15 @@ func init() {
 		ReadTimeout:  3 * time.Second, // 读取超时
 		WriteTimeout: 3 * time.Second, // 写入超时
 		PoolTimeout:  4 * time.Second, // 获取连接的超时时间
-	}
-
-	// Configure TLS if enabled
-	if redisTLS {
-		logMessage(LogLevelInfo, "Configuring Redis with TLS")
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-
-		// Automatically set a default certificate path if TLS is enabled but no path is provided
-		if redisCertPath == "" {
-			// Use a default location for the certificate
-			homeDir, err := os.UserHomeDir()
-			if err == nil {
-				redisCertPath = filepath.Join(homeDir, "server-ca.pem")
-				logMessage(LogLevelInfo, "No Redis certificate path provided, using default: %s", redisCertPath)
-			} else {
-				logMessage(LogLevelWarning, "Could not determine home directory for default certificate path: %v", err)
-			}
-		}
-
-		// Load CA certificate if provided
-		if redisCertPath != "" {
-			logMessage(LogLevelInfo, "Loading Redis CA certificate from: %s", redisCertPath)
-			caCert, err := os.ReadFile(redisCertPath)
-			if err != nil {
-				logMessage(LogLevelError, "Failed to read Redis CA certificate: %v", err)
-			} else {
-				caCertPool := x509.NewCertPool()
-				if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
-					logMessage(LogLevelError, "Failed to parse Redis CA certificate")
-				} else {
-					tlsConfig.RootCAs = caCertPool
-					logMessage(LogLevelInfo, "Redis CA certificate loaded successfully")
-				}
-			}
-		}
-
-		redisOptions.TLSConfig = tlsConfig
+		TLSConfig: &tls.Config{
+			RootCAs: caCertPool,
+		},
 	}
 
 	redisClient = redis.NewClient(redisOptions)
 
 	// Test Redis connection
-	ctx := context.Background()
+
 	_, err = redisClient.Ping(ctx).Result()
 
 	// 启动健康检查 goroutine
@@ -485,7 +477,7 @@ func handleKeepaProduct(c *gin.Context) {
 	// Send request
 	logMessage(LogLevelInfo, "[RequestID: %s] Sending request to Keepa API", requestID)
 	res, err := client.Do(req)
-	if err != nil {
+	if err != nil && res != nil {
 		var cause string
 		switch res.StatusCode {
 		case 400:
