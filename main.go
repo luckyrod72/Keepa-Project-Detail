@@ -304,9 +304,11 @@ func init() {
 
 	// Configure Redis options
 	redisOptions := &redis.Options{
-		Addr:     redisAddr,
-		Password: redisPassword,
-		DB:       redisDB,
+		Addr:         redisAddr,
+		Password:     redisPassword,
+		DB:           redisDB,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 
 	// Configure TLS if enabled
