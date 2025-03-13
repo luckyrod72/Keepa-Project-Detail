@@ -1,4 +1,4 @@
-name: Deploy Go App to Google Cloud Run
+name: Deploy Go App to Google Cloud Run with Redis Connector
 
 on:
   push:
@@ -6,55 +6,57 @@ on:
       - main
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  SERVICE_NAME: my-go-service  # 替换为您的服务名称
-  REGION: us-central1          # 替换为您的区域
+  SERVICE_NAME: my-go-service
+  REGION: us-central1  # 确保与 redis-connector 的区域一致
+  VPC_CONNECTOR: redis-connector  # Serverless VPC Access 连接器名称
+  REDIS_ADDR: 10.103.208.3:6378
   REDIS_PASSWORD: 4fefe278-f03d-4718-955e-6403e30ebc50
-  REDIS_HOST: 10.103.208.3:6378  # 替换为您的 Redis 实例的完全限定名
-  REDIS_INSTANCE_ID: redis-keepa
-  VPC_CONNECTOR: redis-connector
+  INSTANCE_ID: redis-keepa
+
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 检出代码
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       # 设置 Google Cloud SDK
-      - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
         with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
           service_account_key: ${{ secrets.GCP_SA_KEY }}
-          project_id: ${{ env.PROJECT_ID }}
-          export_default_credentials: true
 
-      # 配置 Docker 以推送镜像到 Google Container Registry
-      - name: Configure Docker
-        run: gcloud auth configure-docker --quiet
+      # 配置 Docker 使用 GCP 认证
+      - name: Configure Docker for GCP
+        run: gcloud auth configure-docker
 
-      # 构建并推送 Docker 镜像
-      - name: Build and Push Docker Image
+      # 构建并推送到 Google Container Registry
+      - name: Build and Push Docker image
         run: |
-          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} .
-          docker push gcr.io/${{ env.c }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          export IMAGE_NAME=gcr.io/${{ secrets.GCP_PROJECT_ID }}/go-app:${{ github.sha }}
+          docker build -t $IMAGE_NAME .
+          docker push $IMAGE_NAME
 
-      # 部署到 Cloud Run
+      # 部署到 Cloud Run 并连接 VPC 访问通道
       - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
-        with:
-          service: ${{ env.SERVICE_NAME }}
-          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-          region: ${{ env.REGION }}
-          platform: managed
-          service_account: ${{secrets.CLIENT_EMAIL}}
-          allow-unauthenticated: true  # 如果需要公开访问，设为 true
-          vpc_connector: ${{ env.VPC_CONNECTOR }}
-          env_vars: |
-            REDIS_ADDR= ${{env.REDIS_HOST}}
-            REDIS_PASSWORD=${{ env.REDIS_PASSWORD }}
-            PROJECT_ID=${{secrets.PROJECT_ID}}
-            REGION=${{env.REGION}}
-            INSTANCE_ID=${{env.REDIS_INSTANCE_ID}}
+        if: github.event_name != 'pull_request'
+        run: |
+          gcloud run deploy go-app \
+            --image=gcr.io/${{ secrets.GCP_PROJECT_ID }}/go-app:${{ github.sha }} \
+            --platform=managed \
+            --region=${{ secrets.GCP_REGION }} \
+            --allow-unauthenticated \
+            --port=8080 \
+            --memory=256Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=10 \
+            --vpc-connector=redis-connector \
+            --set-env-vars=REDIS_ADDR=${{ env.REDIS_ADDR }} \
+            --set-env-vars=REDIS_PASSWORD=${{ env.REDIS_PASSWORD }} \
+            --set-env-vars=PROJECT_ID=${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars=REGION=${{ env.REGION }} \
+            --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }}
