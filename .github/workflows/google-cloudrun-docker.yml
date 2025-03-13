@@ -13,7 +13,7 @@ env:
   REDIS_PASSWORD: fbc3aa49-43b9-4e1e-88cd-1561802074af
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
-  APP_SCRIPT: https://script.google.com/macros/s/AKfycbxTFYaP8sds4nUup5WIQYUQYS3PjT6DVGi8oHpycDGRFqGqxsvr-U1wkiUnpmGi7gl9/exec
+  APP_SCRIPT: https://script.google.com/macros/s/AKfycbyJsRscmYEkFwq88he7AeG6uWQ3qJ8ffGxDpy-LZB_X8vT02K1QAD_G1V8e9ucRyjGY/exec
 
 jobs:
   build-and-deploy:
