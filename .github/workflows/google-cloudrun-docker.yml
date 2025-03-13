@@ -31,7 +31,7 @@ jobs:
 
       # 配置 Docker 使用 GCP 认证
       - name: Configure Docker for GCP
-        run: gcloud auth configure-docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
       # 构建并推送到 Google Container Registry
       - name: Build and Push Docker image
