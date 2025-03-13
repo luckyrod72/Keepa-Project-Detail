@@ -12,6 +12,7 @@ env:
   REDIS_ADDR: 10.103.208.3:6378
   REDIS_PASSWORD: 4fefe278-f03d-4718-955e-6403e30ebc50
   INSTANCE_ID: redis-keepa
+  PROJECT_ID: scientific-host-421314
 
 
 jobs:
@@ -26,8 +27,7 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
-          project_id: ${{ secrets.PROJECT_ID }}
-          service_account_key: ${{ secrets.PRIVATE_KEY }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       # 配置 Docker 使用 GCP 认证
       - name: Configure Docker for GCP
@@ -36,7 +36,7 @@ jobs:
       # 构建并推送到 Google Container Registry
       - name: Build and Push Docker image
         run: |
-          export IMAGE_NAME=gcr.io/${{ secrets.PROJECT_ID }}/go-app:${{ github.sha }}
+          export IMAGE_NAME=gcr.io/${{ env.PROJECT_ID }}/go-app:${{ github.sha }}
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
 
@@ -45,7 +45,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           gcloud run deploy go-app \
-            --image=gcr.io/${{ secrets.PROJECT_ID }}/go-app:${{ github.sha }} \
+            --image=gcr.io/${{ env.PROJECT_ID }}/go-app:${{ github.sha }} \
             --platform=managed \
             --region=${{ env.REGION }} \
             --allow-unauthenticated \
@@ -57,6 +57,6 @@ jobs:
             --vpc-connector=redis-connector \
             --set-env-vars=REDIS_ADDR=${{ env.REDIS_ADDR }} \
             --set-env-vars=REDIS_PASSWORD=${{ env.REDIS_PASSWORD }} \
-            --set-env-vars=PROJECT_ID=${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars=PROJECT_ID=${{ env.PROJECT_ID }} \
             --set-env-vars=REGION=${{ env.REGION }} \
             --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }}
