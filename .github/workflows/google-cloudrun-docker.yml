@@ -57,4 +57,4 @@ jobs:
             REDIS_PASSWORD=${{ env.REDIS_PASSWORD }}
             PROJECT_ID=${{secrets.PROJECT_ID}}
             REGION=${{env.REGION}}
-            INSTANCE_ID=${{REDIS_INSTANCE_ID}}
+            INSTANCE_ID=${{env.REDIS_INSTANCE_ID}}
