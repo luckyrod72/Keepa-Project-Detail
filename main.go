@@ -333,7 +333,7 @@ func init() {
 	redisPassword := getEnvWithDefault("REDIS_PASSWORD", "")
 	redisDB, _ := strconv.Atoi(getEnvWithDefault("REDIS_DB", "0"))
 	projectID := getEnvWithDefault("PROJECT_ID", "")
-	location := getEnvWithDefault("LOCATION_ID", "")
+	location := getEnvWithDefault("REGION", "")
 	instanceID := getEnvWithDefault("INSTANCE_ID", "")
 
 	// Configure Redis options
