@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	memorystore "cloud.google.com/go/redis/apiv1"
 	"cloud.google.com/go/redis/apiv1/redispb"
 	"context"
@@ -314,6 +315,8 @@ var logger *log.Logger
 
 var keepaLimiter *rate.Limiter
 
+var appScriptURL string
+
 func init() {
 	// Create log file if it doesn't exist
 	logFile := getEnvWithDefault("LOG_FILE", "keepa_api.log")
@@ -335,7 +338,7 @@ func init() {
 	projectID := getEnvWithDefault("PROJECT_ID", "")
 	location := getEnvWithDefault("REGION", "")
 	instanceID := getEnvWithDefault("INSTANCE_ID", "")
-
+	appScriptURL = getEnvWithDefault("APP_SCRIPT_URL", "")
 	// Configure Redis options
 	ctx := context.Background()
 
@@ -403,7 +406,6 @@ func init() {
 	keepaLimiter = rate.NewLimiter(rate.Limit(KeepaRateLimit), KeepaRateLimit)
 
 	logMessage(LogLevelInfo, "Rate limiter initialized with limit of %d requests per second", KeepaRateLimit)
-
 }
 
 // Add these helper functions for Redis operations
@@ -513,6 +515,7 @@ func handleKeepaProduct(c *gin.Context) {
 		case result := <-resultChan:
 			for asin, data := range result {
 				results[asin] = data
+				sendToAppScript(requestID, asin, data)
 			}
 		case <-ctx.Done():
 			logMessage(LogLevelError, "[RequestID: %s] Request timeout", requestID)
@@ -663,4 +666,43 @@ func getEnvWithDefault(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+// Function to send product data to App Script
+func sendToAppScript(requestID, asin string, data []byte) {
+	logMessage(LogLevelInfo, "[RequestID: %s] Sending data to App Script for ASIN: %s", requestID, asin)
+
+	// Create HTTP client
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", appScriptURL, bytes.NewBuffer(data))
+	if err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to create App Script request: %v", requestID, err)
+		return
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ASIN", asin)
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to send data to App Script: %v", requestID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Check response
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		logMessage(LogLevelError, "[RequestID: %s] App Script returned non-200 status code: %d, body: %s",
+			requestID, resp.StatusCode, string(body))
+		return
+	}
+
+	logMessage(LogLevelInfo, "[RequestID: %s] Successfully sent data to App Script for ASIN: %s", requestID, asin)
 }

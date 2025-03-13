@@ -13,7 +13,7 @@ env:
   REDIS_PASSWORD: 4fefe278-f03d-4718-955e-6403e30ebc50
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
-
+  APP_SCRIPT: https://script.google.com/macros/s/AKfycbxTFYaP8sds4nUup5WIQYUQYS3PjT6DVGi8oHpycDGRFqGqxsvr-U1wkiUnpmGi7gl9/exec
 
 jobs:
   build-and-deploy:
@@ -50,11 +50,11 @@ jobs:
       - name: Deploy to Cloud Run
         if: github.event_name != 'pull_request'
         run: |
-          gcloud run deploy go-app \
+          gcloud run deploy go-app-${{ github.sha }} \
             --image=us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/my-app:${{ github.sha }} \
             --platform=managed \
             --region=${{ env.REGION }} \
-            --allow-unauthenticated \
+            --allow-unauthenticated\
             --port=8080 \
             --memory=256Mi \
             --cpu=1 \
@@ -65,4 +65,5 @@ jobs:
             --set-env-vars=REDIS_PASSWORD=${{ env.REDIS_PASSWORD }} \
             --set-env-vars=PROJECT_ID=${{ env.PROJECT_ID }} \
             --set-env-vars=REGION=${{ env.REGION }} \
-            --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }}
+            --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }} \
+            --set-env-vars=APP_SCRIPT_URL=${{ env.APP_SCRIPT }}
