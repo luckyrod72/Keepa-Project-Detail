@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/time/rate"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -25,6 +25,7 @@ const (
 	LogLevelWarning = "WARNING"
 	LogLevelError   = "ERROR"
 	LogLevelDebug   = "DEBUG"
+	KeepaRateLimit  = 100 // Adjust this based on your Keepa API plan
 )
 
 // KeepaResponse represents the structure of the Keepa API response
@@ -269,6 +270,35 @@ type KeepaProduct struct {
 	ReferralFeePercentage           float64            `json:"referralFeePercentage"`
 }
 
+// Create simplified response with only the needed fields
+type SimplifiedOffer struct {
+	SellerID  string `json:"sellerId"`
+	Condition int    `json:"condition"`
+	IsPrime   bool   `json:"isPrime"`
+	IsAmazon  bool   `json:"isAmazon"`
+	IsFBA     bool   `json:"isFBA"`
+	StockCSV  []int  `json:"stockCSV,omitempty"`
+}
+
+type SimplifiedProduct struct {
+	Asin        string            `json:"asin"`
+	Title       string            `json:"title"`
+	Categories  []int64           `json:"categories"`
+	Brand       string            `json:"brand"`
+	BuyBoxPrice int               `json:"buyBoxPrice,omitempty"`
+	SalesRanks  []int             `json:"salesRanks,omitempty"`
+	Offers      []SimplifiedOffer `json:"offers,omitempty"`
+}
+
+type SimplifiedResponse struct {
+	Products []SimplifiedProduct `json:"products"`
+}
+
+// ASINRequest represents the structure of the incoming POST request
+type ASINRequest struct {
+	ASINs []string `json:"asins"`
+}
+
 // Add these constants for Redis
 const (
 	// ... existing constants
@@ -281,6 +311,8 @@ var redisClient *redis.Client
 
 // Logger instance
 var logger *log.Logger
+
+var keepaLimiter *rate.Limiter
 
 func init() {
 	// Create log file if it doesn't exist
@@ -367,6 +399,11 @@ func init() {
 		}
 	}()
 
+	// Initialize rate limiter
+	keepaLimiter = rate.NewLimiter(rate.Limit(KeepaRateLimit), KeepaRateLimit)
+
+	logMessage(LogLevelInfo, "Rate limiter initialized with limit of %d requests per second", KeepaRateLimit)
+
 }
 
 // Add these helper functions for Redis operations
@@ -410,22 +447,92 @@ func handleKeepaProduct(c *gin.Context) {
 	clientIP := c.ClientIP()
 	logMessage(LogLevelInfo, "[RequestID: %s] Received request from %s", requestID, clientIP)
 
-	// Get ASIN parameter from request, use default if not provided
-	asin := c.DefaultQuery("asin", "B0DCDS4D5L")
-	logMessage(LogLevelInfo, "[RequestID: %s] Request parameter ASIN: %s", requestID, asin)
-
-	// Create context for Redis operations
-	ctx := context.Background()
-
-	// Try to get data from Redis first
-	cachedData, err := getProductFromRedis(ctx, asin)
-	if err == nil && len(cachedData) > 0 {
-		logMessage(LogLevelInfo, "[RequestID: %s] Cache hit for ASIN: %s", requestID, asin)
-		c.Data(http.StatusOK, "application/json", cachedData)
+	// Parse the JSON body
+	var request ASINRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		logMessage(LogLevelError, "[RequestID: %s] Failed to parse request body: %v", requestID, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
-	// Read Keepa API parameters from environment variables, use defaults if not set
+	asinList := request.ASINs
+	if len(asinList) == 0 {
+		logMessage(LogLevelWarning, "[RequestID: %s] No ASINs provided in request", requestID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No ASINs provided"})
+		return
+	}
+
+	logMessage(LogLevelInfo, "[RequestID: %s] Request parameters ASINs: %v", requestID, asinList)
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Create a channel to receive results
+	resultChan := make(chan map[string]json.RawMessage, len(asinList))
+
+	// Create a semaphore to limit concurrent API calls
+	sem := make(chan struct{}, 10) // Adjust this value based on your needs
+
+	// Process each ASIN
+	for _, asin := range asinList {
+		go func(asin string) {
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Try to get data from Redis first
+			cachedData, err := getProductFromRedis(ctx, asin)
+			if err == nil && len(cachedData) > 0 {
+				logMessage(LogLevelInfo, "[RequestID: %s] Cache hit for ASIN: %s", requestID, asin)
+				resultChan <- map[string]json.RawMessage{asin: cachedData}
+				return
+			}
+
+			// If not in cache, fetch from Keepa API
+			productData, err := fetchFromKeepaAPI(ctx, requestID, asin)
+			if err != nil {
+				logMessage(LogLevelError, "[RequestID: %s] Failed to fetch data for ASIN %s: %v", requestID, asin, err)
+				return
+			}
+
+			// Save to Redis
+			err = saveProductToRedis(ctx, asin, productData)
+			if err != nil {
+				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Redis for ASIN %s: %v", requestID, asin, err)
+			}
+
+			resultChan <- map[string]json.RawMessage{asin: productData}
+		}(asin)
+	}
+
+	// Collect results
+	results := make(map[string]json.RawMessage)
+	for i := 0; i < len(asinList); i++ {
+		select {
+		case result := <-resultChan:
+			for asin, data := range result {
+				results[asin] = data
+			}
+		case <-ctx.Done():
+			logMessage(LogLevelError, "[RequestID: %s] Request timeout", requestID)
+			c.JSON(http.StatusRequestTimeout, gin.H{"error": "Request timeout"})
+			return
+		}
+	}
+
+	// Return the combined results
+	c.JSON(http.StatusOK, results)
+}
+
+func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) ([]byte, error) {
+
+	// Wait for permission from the rate limiter
+	if err := keepaLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limit exceeded: %v", err)
+	}
+
+	// Read Keepa API parameters from environment variables
 	domain := getEnvWithDefault("KEEPA_DOMAIN", "1")
 	apiKey := getEnvWithDefault("KEEPA_API_KEY", "rt7t1904up7638ddhboifgfksfedu7pap6gde8p5to6mtripoib3q4n1h3433rh4")
 	stats := getEnvWithDefault("KEEPA_STATS", "90")
@@ -442,19 +549,12 @@ func handleKeepaProduct(c *gin.Context) {
 	buybox := getEnvWithDefault("KEEPA_BUYBOX", "1")
 	stock := getEnvWithDefault("KEEPA_STOCK", "1")
 
-	logMessage(LogLevelDebug, "[RequestID: %s] Keepa API parameters: domain=%s, stats=%s, update=%s, history=%s, days=%s, code-limit=%s, offers=%s, only-live-offers=%s, rental=%s, videos=%s, aplus=%s, rating=%s, buybox=%s, stock=%s",
-		requestID, domain, stats, update, history, days, codeLimit, offers, onlyLiveOffers, rental, videos, aplus, rating, buybox, stock)
-
 	// Build Keepa API URL
 	url := fmt.Sprintf("https://api.keepa.com/product?domain=%s&key=%s&asin=%s&stats=%s&update=%s&history=%s&days=%s&code-limit=%s&offers=%s&only-live-offers=%s&rental=%s&videos=%s&aplus=%s&rating=%s&buybox=%s&stock=%s",
 		domain, apiKey, asin, stats, update, history, days, codeLimit, offers, onlyLiveOffers, rental, videos, aplus, rating, buybox, stock)
-	method := "GET"
 
-	logMessage(LogLevelInfo, "[RequestID: %s] Preparing to send request to Keepa API", requestID)
+	logMessage(LogLevelInfo, "[RequestID: %s] Preparing to send request to Keepa API for ASIN: %s", requestID, asin)
 	logMessage(LogLevelDebug, "[RequestID: %s] Request URL: %s", requestID, url)
-
-	// Create empty request body
-	payload := strings.NewReader(``)
 
 	// Create HTTP client
 	client := &http.Client{
@@ -462,28 +562,26 @@ func handleKeepaProduct(c *gin.Context) {
 	}
 
 	// Create request
-	req, err := http.NewRequest(method, url, payload)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to create request: %v", requestID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to create request: %v", err),
-		})
-		return
+		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
 	// Record request start time
 	startTime := time.Now()
 
 	// Send request
-	logMessage(LogLevelInfo, "[RequestID: %s] Sending request to Keepa API", requestID)
 	res, err := client.Do(req)
 	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to send request: %v", err),
-		})
-		return
+		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
+	defer res.Body.Close()
+
+	// Calculate request duration
+	requestDuration := time.Since(startTime)
+	logMessage(LogLevelInfo, "[RequestID: %s] Keepa API response status code: %d, duration: %v", requestID, res.StatusCode, requestDuration)
+
+	// Check response status code
 	if res.StatusCode != http.StatusOK {
 		var cause string
 		switch res.StatusCode {
@@ -497,66 +595,24 @@ func handleKeepaProduct(c *gin.Context) {
 			cause = "NOT_ENOUGH_TOKEN"
 		}
 		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, cause)
-		return
+		return nil, fmt.Errorf("[RequestID: %s] Failed to send request: %v", requestID, cause)
 	}
-	defer res.Body.Close()
-
-	// Calculate request duration
-	requestDuration := time.Since(startTime)
-	logMessage(LogLevelInfo, "[RequestID: %s] Keepa API response status code: %d, duration: %v", requestID, res.StatusCode, requestDuration)
-
 	// Read response body
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to read response: %v", requestID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to read response: %v", err),
-		})
-		return
+		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
 
 	logMessage(LogLevelDebug, "[RequestID: %s] Response body size: %d bytes", requestID, len(body))
 
-	// If status code is not successful, log detailed error information
-	if res.StatusCode != http.StatusOK {
-		logMessage(LogLevelWarning, "[RequestID: %s] Keepa API returned non-success status code: %d, response content: %s", requestID, res.StatusCode, string(body))
-		c.Data(res.StatusCode, "application/json", body)
-		return
-	}
-
 	// Parse the Keepa API response
 	var keepaResponse KeepaResponse
-	if err := json.Unmarshal(body, &keepaResponse); err != nil {
+	if err = json.Unmarshal(body, &keepaResponse); err != nil {
 		logMessage(LogLevelError, "[RequestID: %s] Failed to parse Keepa API response: %v", requestID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Failed to parse Keepa API response: %v", err),
-		})
-		return
+		return nil, fmt.Errorf("[RequestID: %s] Failed to parse Keepa API response: %v", requestID, err)
 	}
 
-	// Create simplified response with only the needed fields
-	type SimplifiedOffer struct {
-		SellerID  string `json:"sellerId"`
-		Condition int    `json:"condition"`
-		IsPrime   bool   `json:"isPrime"`
-		IsAmazon  bool   `json:"isAmazon"`
-		IsFBA     bool   `json:"isFBA"`
-		StockCSV  []int  `json:"stockCSV,omitempty"`
-	}
-
-	type SimplifiedProduct struct {
-		Asin        string            `json:"asin"`
-		Title       string            `json:"title"`
-		Categories  []int64           `json:"categories"`
-		Brand       string            `json:"brand"`
-		BuyBoxPrice int               `json:"buyBoxPrice,omitempty"`
-		SalesRanks  []int             `json:"salesRanks,omitempty"`
-		Offers      []SimplifiedOffer `json:"offers,omitempty"`
-	}
-
-	var simplifiedResponse struct {
-		Products []SimplifiedProduct `json:"products"`
-	}
+	simplifiedResponse := &SimplifiedResponse{Products: make([]SimplifiedProduct, 0)}
 
 	// Extract the needed fields from each product
 	for _, product := range keepaResponse.Products {
@@ -595,24 +651,9 @@ func handleKeepaProduct(c *gin.Context) {
 		simplifiedResponse.Products = append(simplifiedResponse.Products, simplifiedProduct)
 	}
 
-	// Convert simplified response to JSON
-	simplifiedJSON, err := json.Marshal(simplifiedResponse)
-	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to create simplified response: %v", requestID, err)
-		c.Data(res.StatusCode, "application/json", body) // Return original response on error
-		return
-	}
+	josnResponse, err := json.Marshal(simplifiedResponse)
 
-	// Store product data in Redis
-	err = saveProductToRedis(ctx, asin, simplifiedJSON)
-	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to store product data in Redis: %v", requestID, err)
-	}
-
-	logMessage(LogLevelInfo, "[RequestID: %s] Returning simplified response to client", requestID)
-	c.Data(res.StatusCode, "application/json", simplifiedJSON)
-
-	logMessage(LogLevelInfo, "[RequestID: %s] Request processing completed, total duration: %v", requestID, time.Since(startTime))
+	return josnResponse, err
 }
 
 // Get environment variable, return default value if not set

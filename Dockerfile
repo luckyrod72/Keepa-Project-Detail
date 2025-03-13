@@ -22,8 +22,6 @@ FROM gcr.io/distroless/base-debian11
 # 复制构建的应用
 COPY --from=builder /app/server /server
 
-# 复制 server-ca.pem 证书文件
-COPY --from=builder /app/server-ca.pem /server-ca.pem
 # 暴露端口
 EXPOSE 8080
 
