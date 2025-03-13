@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  SERVICE_NAME: my-go-v3
+  SERVICE_NAME: my-go-v4
   REGION: us-central1  # 确保与 redis-connector 的区域一致
   VPC_CONNECTOR: redis-connector  # Serverless VPC Access 连接器名称
   REDIS_ADDR: 10.103.208.3:6378
