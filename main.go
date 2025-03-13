@@ -515,7 +515,7 @@ func handleKeepaProduct(c *gin.Context) {
 		case result := <-resultChan:
 			for asin, data := range result {
 				results[asin] = data
-				sendToAppScript(requestID, asin, data)
+				go sendToAppScript(requestID, asin, data)
 			}
 		case <-ctx.Done():
 			logMessage(LogLevelError, "[RequestID: %s] Request timeout", requestID)
@@ -674,7 +674,7 @@ func sendToAppScript(requestID, asin string, data []byte) {
 
 	// Create HTTP client
 	client := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 60 * time.Minute,
 	}
 
 	// Create request
