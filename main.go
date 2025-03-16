@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bytes"
+	"cloud.google.com/go/firestore"
 	memorystore "cloud.google.com/go/redis/apiv1"
 	"cloud.google.com/go/redis/apiv1/redispb"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	firebase "firebase.google.com/go"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -310,6 +311,9 @@ const (
 // Add Redis client as a global variable
 var redisClient *redis.Client
 
+// Add Firestore client as a global variable
+var firestoreClient *firestore.Client
+
 // Logger instance
 var logger *log.Logger
 
@@ -404,6 +408,18 @@ func init() {
 
 	// Initialize rate limiter
 	keepaLimiter = rate.NewLimiter(rate.Limit(KeepaRateLimit), KeepaRateLimit)
+
+	// Initialize Firestore client
+	conf := &firebase.Config{ProjectID: projectID}
+	app, err := firebase.NewApp(ctx, conf)
+	if err != nil {
+		logMessage(LogLevelError, "Failed to initialize Firestore client: %v", err)
+	}
+
+	firestoreClient, err = app.Firestore(ctx)
+	if err != nil {
+		logMessage(LogLevelError, "Failed to initialize Firestore client: %v", err)
+	}
 
 	logMessage(LogLevelInfo, "Rate limiter initialized with limit of %d requests per second", KeepaRateLimit)
 }
@@ -515,7 +531,20 @@ func handleKeepaProduct(c *gin.Context) {
 		case result := <-resultChan:
 			for asin, data := range result {
 				results[asin] = data
-				go sendToAppScript(requestID, asin, data)
+				// firestore delete product data from Firestore
+				_, err := firestoreClient.Collection("products").Doc(asin).Delete(ctx)
+				if err != nil {
+					logMessage(LogLevelWarning, "[RequestID: %s] Failed to delete product data from Firestore for ASIN %s: %v", requestID, asin, err)
+				}
+
+				// firestore product data to Firestore
+				_, err = firestoreClient.Collection("products").Doc(asin).Set(ctx, map[string]interface{}{
+					"asin":        asin,
+					"productData": data,
+				})
+				if err != nil {
+					logMessage(LogLevelWarning, "[RequestID: %s] Failed to set product data to Firestore for ASIN %s: %v", requestID, asin, err)
+				}
 			}
 		case <-ctx.Done():
 			logMessage(LogLevelError, "[RequestID: %s] Request timeout", requestID)
@@ -666,43 +695,4 @@ func getEnvWithDefault(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
-}
-
-// Function to send product data to App Script
-func sendToAppScript(requestID, asin string, data []byte) {
-	logMessage(LogLevelInfo, "[RequestID: %s] Sending data to App Script for ASIN: %s", requestID, asin)
-
-	// Create HTTP client
-	client := &http.Client{
-		Timeout: 60 * time.Minute,
-	}
-
-	// Create request
-	req, err := http.NewRequest("POST", appScriptURL, bytes.NewBuffer(data))
-	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to create App Script request: %v", requestID, err)
-		return
-	}
-
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-ASIN", asin)
-
-	// Send request
-	resp, err := client.Do(req)
-	if err != nil {
-		logMessage(LogLevelError, "[RequestID: %s] Failed to send data to App Script: %v", requestID, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		logMessage(LogLevelError, "[RequestID: %s] App Script returned non-200 status code: %d, body: %s",
-			requestID, resp.StatusCode, string(body))
-		return
-	}
-
-	logMessage(LogLevelInfo, "[RequestID: %s] Successfully sent data to App Script for ASIN: %s", requestID, asin)
 }
