@@ -408,7 +408,7 @@ func init() {
 	keepaLimiter = rate.NewLimiter(rate.Limit(KeepaRateLimit), KeepaRateLimit)
 
 	// Initialize Firestore client
-	conf := &firebase.Config{ProjectID: projectID, DatabaseURL: firestoreID}
+	conf := &firebase.Config{ProjectID: projectID, DatabaseURL: fmt.Sprintf("https://%s.firebaseio.com", firestoreID)}
 	app, err := firebase.NewApp(ctx, conf)
 	if err != nil {
 		logMessage(LogLevelError, "Failed to initialize Firestore client: %v", err)
