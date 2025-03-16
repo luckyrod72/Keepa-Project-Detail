@@ -506,9 +506,9 @@ func handleKeepaProduct(c *gin.Context) {
 			defer cancel()
 
 			// Try to get data from Redis first
-			_, err := getProductFromRedis(ctx, asin)
-			if err == nil {
+			if productData, err := getProductFromRedis(ctx, asin); err == nil {
 				logMessage(LogLevelInfo, "[RequestID: %s] Cache hit for ASIN: %s", requestID, asin)
+				firestoreFunction(ctx, requestID, asin, productData)
 				return
 			}
 
@@ -519,22 +519,13 @@ func handleKeepaProduct(c *gin.Context) {
 				return
 			}
 
-			// delete product from Firestore
-			if err := deleteFromFirestore(ctx, asin); err != nil {
-				logMessage(LogLevelWarning, "[RequestID: %s] Failed to delete data from Firestore for ASIN %s: %v", requestID, asin, err)
-			}
-
-			// Save to Firestore
-			if err = saveToFirestore(ctx, asin, productData); err != nil {
-				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Firestore for ASIN %s: %v", requestID, asin, err)
-			}
-
 			// Save to Redis
 			err = saveProductToRedis(ctx, asin, productData)
 			if err != nil {
 				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Redis for ASIN %s: %v", requestID, asin, err)
 			}
 
+			firestoreFunction(ctx, requestID, asin, productData)
 		}(asin)
 	}
 
@@ -764,4 +755,16 @@ func getEnvWithDefault(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func firestoreFunction(ctx context.Context, requestID, asin string, productData *SimplifiedResponse) {
+	// delete product from Firestore
+	if err := deleteFromFirestore(ctx, asin); err != nil {
+		logMessage(LogLevelWarning, "[RequestID: %s] Failed to delete data from Firestore for ASIN %s: %v", requestID, asin, err)
+	}
+
+	// Save to Firestore
+	if err := saveToFirestore(ctx, asin, productData); err != nil {
+		logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Firestore for ASIN %s: %v", requestID, asin, err)
+	}
 }
