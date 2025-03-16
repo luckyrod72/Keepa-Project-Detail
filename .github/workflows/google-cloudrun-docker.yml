@@ -14,6 +14,7 @@ env:
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
   APP_SCRIPT: https://script.google.com/macros/s/AKfycbyJsRscmYEkFwq88he7AeG6uWQ3qJ8ffGxDpy-LZB_X8vT02K1QAD_G1V8e9ucRyjGY/exec
+  FIRESTOREID: keepa
 
 jobs:
   build-and-deploy:
@@ -66,4 +67,5 @@ jobs:
             --set-env-vars=PROJECT_ID=${{ env.PROJECT_ID }} \
             --set-env-vars=REGION=${{ env.REGION }} \
             --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }} \
-            --set-env-vars=APP_SCRIPT_URL=${{ env.APP_SCRIPT }} 
+            --set-env-vars=APP_SCRIPT_URL=${{ env.APP_SCRIPT }} \
+            --set-env-vars=FIRESTORE_ID=${{ env.FIRESTOREID }}
