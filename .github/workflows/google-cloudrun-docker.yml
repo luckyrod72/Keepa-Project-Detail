@@ -14,7 +14,7 @@ env:
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
   APP_SCRIPT: https://script.google.com/macros/s/AKfycbyJsRscmYEkFwq88he7AeG6uWQ3qJ8ffGxDpy-LZB_X8vT02K1QAD_G1V8e9ucRyjGY/exec
-  FIRESTOREID: keepa
+  FIRESTOREID: keepa-v1
 
 jobs:
   build-and-deploy:
