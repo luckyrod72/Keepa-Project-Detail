@@ -340,7 +340,6 @@ func init() {
 	projectID := getEnvWithDefault("PROJECT_ID", "")
 	location := getEnvWithDefault("REGION", "")
 	instanceID := getEnvWithDefault("INSTANCE_ID", "")
-	firestoreID := getEnvWithDefault("FIRESTORE_ID", "")
 	// Configure Redis options
 	ctx := context.Background()
 
@@ -408,7 +407,7 @@ func init() {
 	keepaLimiter = rate.NewLimiter(rate.Limit(KeepaRateLimit), KeepaRateLimit)
 
 	// Initialize Firestore client
-	conf := &firebase.Config{ProjectID: projectID, DatabaseURL: fmt.Sprintf("https://%s.firebaseio.com", firestoreID)}
+	conf := &firebase.Config{ProjectID: projectID}
 	app, err := firebase.NewApp(ctx, conf)
 	if err != nil {
 		logMessage(LogLevelError, "Failed to initialize Firestore client: %v", err)
