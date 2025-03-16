@@ -535,6 +535,8 @@ func handleKeepaProduct(c *gin.Context) {
 				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Redis for ASIN %s: %v", requestID, asin, err)
 			}
 
+			time.Sleep(30 * time.Millisecond)
+
 		}(asin)
 	}
 
