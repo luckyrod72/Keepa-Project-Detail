@@ -10,7 +10,7 @@ env:
   REGION: us-central1  # 确保与 redis-connector 的区域一致
   VPC_CONNECTOR: redis-connector  # Serverless VPC Access 连接器名称
   REDIS_ADDR: 10.103.208.3:6378
-  REDIS_PASSWORD: 2dcff0a8-dbc2-49a7-8aa9-e8991181b08a
+  REDIS_PASSWORD: 5b200e6a-c437-4429-8243-5345fa6f1afe
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
 

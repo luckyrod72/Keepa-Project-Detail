@@ -274,12 +274,12 @@ type KeepaProduct struct {
 
 // Create simplified response with only the needed fields
 type SimplifiedOffer struct {
-	SellerID  string `json:"sellerId"`
-	Condition int    `json:"condition"`
-	IsPrime   bool   `json:"isPrime"`
-	IsAmazon  bool   `json:"isAmazon"`
-	IsFBA     bool   `json:"isFBA"`
-	StockCSV  []int  `json:"stockCSV,omitempty"`
+	SellerID  string         `json:"sellerId"`
+	Condition int            `json:"condition"`
+	IsPrime   bool           `json:"isPrime"`
+	IsAmazon  bool           `json:"isAmazon"`
+	IsFBA     bool           `json:"isFBA"`
+	StockCSV  map[string]int `json:"stockCSV,omitempty"`
 }
 
 type SimplifiedProduct struct {
@@ -288,7 +288,7 @@ type SimplifiedProduct struct {
 	Categories  []int64           `json:"categories"`
 	Brand       string            `json:"brand"`
 	BuyBoxPrice int               `json:"buyBoxPrice,omitempty"`
-	SalesRanks  []int             `json:"salesRanks,omitempty"`
+	SalesRanks  map[string]int    `json:"salesRanks,omitempty"`
 	Offers      []SimplifiedOffer `json:"offers,omitempty"`
 }
 
@@ -422,13 +422,25 @@ func init() {
 }
 
 // Add these helper functions for Redis operations
-func getProductFromRedis(ctx context.Context, asin string) ([]byte, error) {
+func getProductFromRedis(ctx context.Context, asin string) (*SimplifiedResponse, error) {
 	key := RedisKeyPrefix + asin
-	return redisClient.Get(ctx, key).Bytes()
+	data, err := redisClient.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, fmt.Errorf("product not found in Redis")
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to get product from Redis: %v", err)
+	}
+	var simplifiedResponse SimplifiedResponse
+	err = json.Unmarshal(data, &simplifiedResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal product from Redis: %v", err)
+	}
+	return &simplifiedResponse, nil
 }
 
-func saveProductToRedis(ctx context.Context, asin string, data []byte) error {
+func saveProductToRedis(ctx context.Context, asin string, simplifiedResponse *SimplifiedResponse) error {
 	key := RedisKeyPrefix + asin
+	data, _ := json.Marshal(simplifiedResponse)
 	return redisClient.Set(ctx, key, data, RedisTTL).Err()
 }
 
@@ -483,9 +495,6 @@ func handleKeepaProduct(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Create a channel to receive results
-	resultChan := make(chan map[string]json.RawMessage, len(asinList))
-
 	// Create a semaphore to limit concurrent API calls
 	sem := make(chan struct{}, 10) // Adjust this value based on your needs
 
@@ -497,10 +506,9 @@ func handleKeepaProduct(c *gin.Context) {
 			defer func() { <-sem }()
 
 			// Try to get data from Redis first
-			cachedData, err := getProductFromRedis(ctx, asin)
-			if err == nil && len(cachedData) > 0 {
+			_, err := getProductFromRedis(ctx, asin)
+			if err == nil {
 				logMessage(LogLevelInfo, "[RequestID: %s] Cache hit for ASIN: %s", requestID, asin)
-				resultChan <- map[string]json.RawMessage{asin: cachedData}
 				return
 			}
 
@@ -511,50 +519,50 @@ func handleKeepaProduct(c *gin.Context) {
 				return
 			}
 
+			// delete product from Firestore
+			if err := deleteFromFirestore(ctx, asin); err != nil {
+				logMessage(LogLevelWarning, "[RequestID: %s] Failed to delete data from Firestore for ASIN %s: %v", requestID, asin, err)
+			}
+
+			// Save to Firestore
+			if err = saveToFirestore(ctx, asin, productData); err != nil {
+				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Firestore for ASIN %s: %v", requestID, asin, err)
+			}
+
 			// Save to Redis
 			err = saveProductToRedis(ctx, asin, productData)
 			if err != nil {
 				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Redis for ASIN %s: %v", requestID, asin, err)
 			}
 
-			resultChan <- map[string]json.RawMessage{asin: productData}
 		}(asin)
 	}
 
-	// Collect results
-	results := make(map[string]json.RawMessage)
-	for i := 0; i < len(asinList); i++ {
-		select {
-		case result := <-resultChan:
-			for asin, data := range result {
-				results[asin] = data
-				// firestore delete product data from Firestore
-				_, err := firestoreClient.Collection("products").Doc(asin).Delete(ctx)
-				if err != nil {
-					logMessage(LogLevelWarning, "[RequestID: %s] Failed to delete product data from Firestore for ASIN %s: %v", requestID, asin, err)
-				}
-
-				// firestore product data to Firestore
-				_, err = firestoreClient.Collection("products").Doc(asin).Set(ctx, map[string]interface{}{
-					"asin":        asin,
-					"productData": data,
-				})
-				if err != nil {
-					logMessage(LogLevelWarning, "[RequestID: %s] Failed to set product data to Firestore for ASIN %s: %v", requestID, asin, err)
-				}
-			}
-		case <-ctx.Done():
-			logMessage(LogLevelError, "[RequestID: %s] Request timeout", requestID)
-			c.JSON(http.StatusRequestTimeout, gin.H{"error": "Request timeout"})
-			return
-		}
-	}
-
 	// Return the combined results
-	c.JSON(http.StatusOK, results)
+	c.JSON(http.StatusOK, nil)
 }
 
-func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) ([]byte, error) {
+func deleteFromFirestore(ctx context.Context, asin string) interface{} {
+	// Delete product from Firestore
+	docRef := firestoreClient.Collection("products").Doc(asin)
+	_, err := docRef.Delete(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete product from Firestore: %v", err)
+	}
+	return nil
+}
+
+func saveToFirestore(ctx context.Context, asin string, productData *SimplifiedResponse) error {
+	// Create a new document in Firestore
+	docRef := firestoreClient.Collection("products").Doc(asin)
+	_, err := docRef.Set(ctx, productData)
+	if err != nil {
+		return fmt.Errorf("failed to save product to Firestore: %v", err)
+	}
+	return nil
+}
+
+func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*SimplifiedResponse, error) {
 
 	// Wait for permission from the rate limiter
 	if err := keepaLimiter.Wait(ctx); err != nil {
@@ -646,12 +654,23 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) ([]byte, err
 	// Extract the needed fields from each product
 	for _, product := range keepaResponse.Products {
 		rootCategory := strconv.Itoa(product.RootCategory)
+
+		// Create sales ranks map with timestamp as key and rank as value
+		salesRanks := make(map[string]int)
+		if len(product.SalesRanks[rootCategory]) > 0 && len(product.SalesRanks[rootCategory])%2 == 0 {
+			for i := 0; i < len(product.SalesRanks[rootCategory]); i += 2 {
+				timestamp := time.UnixMilli(int64(product.SalesRanks[rootCategory][i]+21564000) * 60000)
+				timestampStr := timestamp.Format(time.DateTime)
+				salesRanks[timestampStr] = product.SalesRanks[rootCategory][i+1]
+			}
+		}
+
 		simplifiedProduct := SimplifiedProduct{
 			Asin:       product.Asin,
 			Title:      product.Title,
 			Categories: product.Categories,
 			Brand:      product.Brand,
-			SalesRanks: product.SalesRanks[rootCategory],
+			SalesRanks: salesRanks,
 		}
 
 		// Add buyBoxPrice if available
@@ -670,8 +689,14 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) ([]byte, err
 			}
 
 			// Only include stockCSV if it's not empty
-			if len(offer.StockCSV) > 0 {
-				simplifiedOffer.StockCSV = offer.StockCSV
+			if len(offer.StockCSV) > 0 && len(offer.StockCSV)%2 == 0 {
+				stockCSV := make(map[string]int)
+				for i := 0; i < len(offer.StockCSV); i += 2 {
+					timestamp := time.UnixMilli(int64(offer.StockCSV[i]+21564000) * 60000)
+					timestampStr := timestamp.Format(time.DateTime)
+					stockCSV[timestampStr] = offer.StockCSV[i+1]
+				}
+				simplifiedOffer.StockCSV = stockCSV
 			}
 
 			simplifiedProduct.Offers = append(simplifiedProduct.Offers, simplifiedOffer)
@@ -680,9 +705,7 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) ([]byte, err
 		simplifiedResponse.Products = append(simplifiedResponse.Products, simplifiedProduct)
 	}
 
-	josnResponse, err := json.Marshal(simplifiedResponse)
-
-	return josnResponse, err
+	return simplifiedResponse, err
 }
 
 // Get environment variable, return default value if not set
