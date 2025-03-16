@@ -67,4 +67,5 @@ jobs:
             --set-env-vars=PROJECT_ID=${{ env.PROJECT_ID }} \
             --set-env-vars=REGION=${{ env.REGION }} \
             --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }} \
-            --set-env-vars=APP_SCRIPT_URL=${{ env.APP_SCRIPT }} 
+            --set-env-vars=APP_SCRIPT_URL=${{ env.APP_SCRIPT } \
+            --set-env-vars=FIRESTORE_ID=${{ env.FIRESTOREID }}
