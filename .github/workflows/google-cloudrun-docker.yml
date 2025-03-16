@@ -13,6 +13,8 @@ env:
   REDIS_PASSWORD: 5b200e6a-c437-4429-8243-5345fa6f1afe
   INSTANCE_ID: redis-keepa
   PROJECT_ID: scientific-host-421314
+  KEEPA_MAX_RETRIES: 5
+  MAXRETRIES_SLEEP_SEC: 1
 
 jobs:
   build-and-deploy:
@@ -64,4 +66,6 @@ jobs:
             --set-env-vars=REDIS_PASSWORD=${{ env.REDIS_PASSWORD }} \
             --set-env-vars=PROJECT_ID=${{ env.PROJECT_ID }} \
             --set-env-vars=REGION=${{ env.REGION }} \
-            --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }} 
+            --set-env-vars=INSTANCE_ID=${{ env.INSTANCE_ID }} \
+            --set-env-vars=KEEPA_MAX_RETRIES=${{ env.KEEPA_MAX_RETRIES }} \
+            --set-env-vars=MAXRETRIES_SLEEP_SEC=${{ env.MAXRETRIES_SLEEP_SEC }}

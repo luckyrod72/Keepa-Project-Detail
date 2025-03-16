@@ -554,11 +554,6 @@ func saveToFirestore(ctx context.Context, asin string, productData *SimplifiedRe
 }
 
 func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*SimplifiedResponse, error) {
-	// Maximum number of retries
-	maxRetries := 10
-	// Initial backoff duration
-	backoffDuration := 1 * time.Minute
-
 	var keepaResponse KeepaResponse
 	var res *http.Response
 	var body []byte
@@ -585,6 +580,10 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*Simplified
 	rating := getEnvWithDefault("KEEPA_RATING", "0")
 	buybox := getEnvWithDefault("KEEPA_BUYBOX", "1")
 	stock := getEnvWithDefault("KEEPA_STOCK", "1")
+	maxRetriesStr := getEnvWithDefault("KEEPA_MAX_RETRIES", "3")
+	maxRetries, err := strconv.Atoi(maxRetriesStr)
+	keepaSleep := getEnvWithDefault("MAXRETRIES_SLEEP_SEC", "1")
+	backoffDuration, err := time.ParseDuration(keepaSleep + "m")
 
 	// Build Keepa API URL
 	url := fmt.Sprintf("https://api.keepa.com/product?domain=%s&key=%s&asin=%s&stats=%s&update=%s&history=%s&days=%s&code-limit=%s&offers=%s&only-live-offers=%s&rental=%s&videos=%s&aplus=%s&rating=%s&buybox=%s&stock=%s",
