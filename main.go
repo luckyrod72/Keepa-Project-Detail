@@ -319,8 +319,6 @@ var logger *log.Logger
 
 var keepaLimiter *rate.Limiter
 
-var appScriptURL string
-
 func init() {
 	// Create log file if it doesn't exist
 	logFile := getEnvWithDefault("LOG_FILE", "keepa_api.log")
@@ -342,7 +340,6 @@ func init() {
 	projectID := getEnvWithDefault("PROJECT_ID", "")
 	location := getEnvWithDefault("REGION", "")
 	instanceID := getEnvWithDefault("INSTANCE_ID", "")
-	appScriptURL = getEnvWithDefault("APP_SCRIPT_URL", "")
 	// Configure Redis options
 	ctx := context.Background()
 
