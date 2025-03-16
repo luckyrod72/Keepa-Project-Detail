@@ -535,8 +535,6 @@ func handleKeepaProduct(c *gin.Context) {
 				logMessage(LogLevelWarning, "[RequestID: %s] Failed to save data to Redis for ASIN %s: %v", requestID, asin, err)
 			}
 
-			time.Sleep(30 * time.Millisecond)
-
 		}(asin)
 	}
 
@@ -565,6 +563,15 @@ func saveToFirestore(ctx context.Context, asin string, productData *SimplifiedRe
 }
 
 func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*SimplifiedResponse, error) {
+	// Maximum number of retries
+	maxRetries := 3
+	// Initial backoff duration
+	backoffDuration := 30 * time.Second
+
+	var keepaResponse KeepaResponse
+	var res *http.Response
+	var body []byte
+	var err error
 
 	// Wait for permission from the rate limiter
 	if err := keepaLimiter.Wait(ctx); err != nil {
@@ -606,46 +613,86 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*Simplified
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
-	// Record request start time
-	startTime := time.Now()
+	// Retry loop
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// If this is a retry attempt, log and wait
+		if attempt > 0 {
+			logMessage(LogLevelWarning, "[RequestID: %s] Retry attempt %d for ASIN %s after rate limit (429). Waiting %v before retry",
+				requestID, attempt, asin, backoffDuration)
 
-	// Send request
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %v", err)
-	}
-	defer res.Body.Close()
+			select {
+			case <-time.After(backoffDuration):
+				// Continue after backoff
+			case <-ctx.Done():
+				return nil, fmt.Errorf("context cancelled during backoff: %v", ctx.Err())
+			}
 
-	// Calculate request duration
-	requestDuration := time.Since(startTime)
-	logMessage(LogLevelInfo, "[RequestID: %s] Keepa API response status code: %d, duration: %v", requestID, res.StatusCode, requestDuration)
-
-	// Check response status code
-	if res.StatusCode != http.StatusOK {
-		var cause string
-		switch res.StatusCode {
-		case 400:
-			cause = "REQUEST_REJECTED"
-		case 402:
-			cause = "PAYMENT_REQUIRED"
-		case 405:
-			cause = "METHOD_NOT_ALLOWED"
-		case 429:
-			cause = "NOT_ENOUGH_TOKEN"
+			// Increase backoff for next potential retry (exponential backoff)
+			backoffDuration *= 2
 		}
-		logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, cause)
-		return nil, fmt.Errorf("[RequestID: %s] Failed to send request: %v", requestID, cause)
-	}
-	// Read response body
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %v", err)
+
+		// Record request start time
+		startTime := time.Now()
+
+		// Send request
+		res, err = client.Do(req)
+		if err != nil {
+			if attempt == maxRetries {
+				return nil, fmt.Errorf("failed to send request after %d attempts: %v", maxRetries+1, err)
+			}
+			logMessage(LogLevelError, "[RequestID: %s] Failed to send request (attempt %d): %v", requestID, attempt+1, err)
+			continue
+		}
+
+		// Calculate request duration
+		requestDuration := time.Since(startTime)
+		logMessage(LogLevelInfo, "[RequestID: %s] Keepa API response status code: %d, duration: %v", requestID, res.StatusCode, requestDuration)
+
+		// If we got a 429, close the response body and retry
+		if res.StatusCode == http.StatusTooManyRequests {
+			res.Body.Close()
+			if attempt == maxRetries {
+				return nil, fmt.Errorf("still rate limited after %d retries", maxRetries+1)
+			}
+			continue
+		}
+
+		// For other non-200 status codes, handle them without retrying
+		if res.StatusCode != http.StatusOK {
+			defer res.Body.Close()
+			var cause string
+			switch res.StatusCode {
+			case 400:
+				cause = "REQUEST_REJECTED"
+			case 402:
+				cause = "PAYMENT_REQUIRED"
+			case 405:
+				cause = "METHOD_NOT_ALLOWED"
+			default:
+				cause = fmt.Sprintf("HTTP %d", res.StatusCode)
+			}
+			logMessage(LogLevelError, "[RequestID: %s] Failed to send request: %v", requestID, cause)
+			return nil, fmt.Errorf("[RequestID: %s] Failed to send request: %v", requestID, cause)
+		}
+
+		// Read response body
+		body, err = io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			if attempt == maxRetries {
+				return nil, fmt.Errorf("failed to read response body after %d attempts: %v", maxRetries+1, err)
+			}
+			logMessage(LogLevelError, "[RequestID: %s] Failed to read response body (attempt %d): %v", requestID, attempt+1, err)
+			continue
+		}
+
+		// If we got here, we have a successful response, so break out of the retry loop
+		break
 	}
 
 	logMessage(LogLevelDebug, "[RequestID: %s] Response body size: %d bytes", requestID, len(body))
 
 	// Parse the Keepa API response
-	var keepaResponse KeepaResponse
 	if err = json.Unmarshal(body, &keepaResponse); err != nil {
 		logMessage(LogLevelError, "[RequestID: %s] Failed to parse Keepa API response: %v", requestID, err)
 		return nil, fmt.Errorf("[RequestID: %s] Failed to parse Keepa API response: %v", requestID, err)
@@ -707,7 +754,7 @@ func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*Simplified
 		simplifiedResponse.Products = append(simplifiedResponse.Products, simplifiedProduct)
 	}
 
-	return simplifiedResponse, err
+	return simplifiedResponse, nil
 }
 
 // Get environment variable, return default value if not set
