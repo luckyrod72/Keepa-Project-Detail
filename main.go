@@ -555,9 +555,9 @@ func saveToFirestore(ctx context.Context, asin string, productData *SimplifiedRe
 
 func fetchFromKeepaAPI(ctx context.Context, requestID, asin string) (*SimplifiedResponse, error) {
 	// Maximum number of retries
-	maxRetries := 3
+	maxRetries := 10
 	// Initial backoff duration
-	backoffDuration := 30 * time.Second
+	backoffDuration := 1 * time.Minute
 
 	var keepaResponse KeepaResponse
 	var res *http.Response
