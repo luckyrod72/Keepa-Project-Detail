@@ -491,10 +491,6 @@ func handleKeepaProduct(c *gin.Context) {
 
 	logMessage(LogLevelInfo, "[RequestID: %s] Request parameters ASINs: %v", requestID, asinList)
 
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
 	// Create a semaphore to limit concurrent API calls
 	sem := make(chan struct{}, 10) // Adjust this value based on your needs
 
@@ -504,6 +500,10 @@ func handleKeepaProduct(c *gin.Context) {
 			// Acquire semaphore
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			// Create a context with timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
 
 			// Try to get data from Redis first
 			_, err := getProductFromRedis(ctx, asin)
