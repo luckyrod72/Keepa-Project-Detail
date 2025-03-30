@@ -9,12 +9,12 @@ env:
   SERVICE_NAME: keepa-product-detail-v1
   REGION: us-central1  # 确保与 redis-connector 的区域一致
   VPC_CONNECTOR: redis-connector  # Serverless VPC Access 连接器名称
-  REDIS_ADDR: 10.103.208.3:6378
-  REDIS_PASSWORD: 5b200e6a-c437-4429-8243-5345fa6f1afe
-  INSTANCE_ID: redis-keepa
-  PROJECT_ID: scientific-host-421314
-  KEEPA_MAX_RETRIES: 5
-  MAXRETRIES_SLEEP_SEC: 1
+  REDIS_ADDR: 10.11.16.3:6378
+  REDIS_PASSWORD: d2f5bd88-2e92-443f-bf97-5cd14fca4a08
+  INSTANCE_ID: keepa-redis
+  PROJECT_ID: intrepid-kiln-455107-s1
+  KEEPA_MAX_RETRIES: 15
+  MAXRETRIES_SLEEP_SEC: 5
 
 jobs:
   build-and-deploy:
